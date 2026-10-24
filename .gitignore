@@ -1,0 +1,18 @@
+# Local agent/editor settings
+.claude/
+.vscode/
+.idea/
+
+# Python runtime files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+.env.*
+
+# Notebook checkpoints and generated experiment output
+adverscan/notebooks/.ipynb_checkpoints/
+adverscan/results/*.json
+adverscan/results/plots/*.png

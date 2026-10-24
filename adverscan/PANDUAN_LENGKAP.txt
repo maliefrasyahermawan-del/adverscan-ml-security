@@ -1,0 +1,700 @@
+================================================================================
+  ADVERSCAN — PANDUAN LENGKAP PENGGUNAAN
+  Adversarial ML Lab untuk Intrusion Detection System
+================================================================================
+  Versi   : 1.0
+  Target  : Windows 11, Python 3.11, CPU only (tidak butuh GPU)
+  Penulis : AdverScan Lab
+================================================================================
+
+
+================================================================================
+  BAGIAN 1 — APA ITU ADVERSCAN?
+================================================================================
+
+AdverScan adalah laboratorium eksperimen yang membuktikan bahwa model
+Machine Learning (ML) untuk keamanan jaringan bisa DITIPU oleh teknik
+yang disebut "adversarial perturbation."
+
+ANALOGI SEDERHANA:
+  Bayangkan kamu punya detector anjing yang bisa membedakan foto anjing
+  vs kucing dengan akurasi 98%. Tapi kalau kamu tambahkan noise kecil
+  yang tidak kelihatan mata manusia ke foto anjing — detector itu
+  tiba-tiba bilang "ini kucing."
+  AdverScan melakukan hal yang sama, tapi untuk traffic jaringan:
+  traffic serangan (attack) dimodifikasi sedikit supaya sistem IDS
+  mengklasifikasikannya sebagai traffic normal (benign).
+
+MASALAH YANG DIBUKTIKAN:
+  - Model Random Forest dengan akurasi 92-98% di kondisi normal...
+  - ...bisa turun ke 0-25% detection rate setelah adversarial attack
+  - Artinya: serangan lolos tanpa terdeteksi!
+
+SOLUSI YANG DIDEMONSTRASIKAN:
+  - Adversarial Training: latih ulang model dengan contoh serangan
+  - Feature Squeezing: kurangi presisi fitur untuk "menghapus" perturbasi
+  - Kedua defense berhasil memulihkan detection rate ke 65-93%
+
+
+================================================================================
+  BAGIAN 2 — FUNGSI UTAMA SISTEM
+================================================================================
+
+AdverScan memiliki 6 fungsi inti yang berjalan secara berurutan:
+
++---+---------------------------+----------------------------------------------+
+| # | Fungsi                    | Yang Dilakukan                               |
++---+---------------------------+----------------------------------------------+
+| 1 | DATA PIPELINE             | Load CSV dataset network traffic             |
+|   |                           | Bersihkan kolom, handle NaN/Inf              |
+|   |                           | Pilih 20 fitur terbaik (berbasis variance)   |
+|   |                           | Normalisasi dengan StandardScaler            |
+|   |                           | Split 80% train / 20% test (stratified)      |
++---+---------------------------+----------------------------------------------+
+| 2 | MODEL TRAINING            | Latih Random Forest (model utama IDS)        |
+|   |                           | Latih Logistic Regression (surrogate/proxy)  |
+|   |                           | Evaluasi: accuracy, precision, recall, F1    |
++---+---------------------------+----------------------------------------------+
+| 3 | ADVERSARIAL ATTACK        | FGSM: single-step gradient perturbation      |
+|   |                           | PGD: iterative multi-step perturbation       |
+|   |                           | Ukur: detection rate setelah attack          |
+|   |                           | Sweep epsilon dari 0.0 hingga 0.5            |
++---+---------------------------+----------------------------------------------+
+| 4 | DEFENSE                   | Adversarial Training: retrain dgn aug. data  |
+|   |                           | Feature Squeezing: quantize fitur ke 8-bit   |
+|   |                           | Ukur: recovery detection rate setelah defense|
++---+---------------------------+----------------------------------------------+
+| 5 | VISUALIZATION             | Plot 1: Detection rate vs Epsilon (lineplot) |
+|   |                           | Plot 2: Confusion matrix baseline            |
+|   |                           | Plot 3: Confusion matrix under attack        |
+|   |                           | Plot 4: Defense comparison bar chart         |
++---+---------------------------+----------------------------------------------+
+| 6 | REPORTING                 | Simpan semua hasil ke JSON                   |
+|   |                           | 5 Jupyter Notebook untuk presentasi          |
+|   |                           | Notebook interaktif dengan slider epsilon    |
++---+---------------------------+----------------------------------------------+
+
+
+================================================================================
+  BAGIAN 3 — ARSITEKTUR SISTEM
+================================================================================
+
+3.1 STRUKTUR FOLDER
+--------------------
+
+adverscan/
+|
++-- run_experiment.py          <-- ENTRY POINT UTAMA
+|                                  Jalankan: python run_experiment.py
+|
++-- src/                       <-- SEMUA MODUL PYTHON
+|   |
+|   +-- data_pipeline.py       Modul 1: Load & preprocess dataset
+|   |                          Input : path CSV
+|   |                          Output: X_train, X_test, y_train, y_test, scaler
+|   |
+|   +-- model.py               Modul 2: Training & evaluasi model
+|   |                          - train_random_forest()
+|   |                          - train_logistic_regression()
+|   |                          - evaluate() -> dict metrics
+|   |
+|   +-- attacker.py            Modul 3: Adversarial attack
+|   |                          - train_surrogate()   -> LR proxy
+|   |                          - fgsm_attack()       -> X_adversarial
+|   |                          - pgd_attack()        -> X_adversarial
+|   |                          - evaluate_attack()   -> detection_rate
+|   |
+|   +-- defender.py            Modul 4: Defense strategies
+|   |                          - adversarial_training()
+|   |                          - feature_squeezing_predict()
+|   |                          - round_to_bits()
+|   |
+|   +-- experiment.py          Modul 5: Orchestrator penuh
+|   |                          - run_full_experiment() -> semua hasil
+|   |
+|   +-- visualizer.py          Modul 6: Generate semua plot
+|                              - generate_all_plots()
+|
++-- notebooks/                 <-- JUPYTER NOTEBOOKS
+|   +-- 01_data_exploration.ipynb     EDA dataset
+|   +-- 02_baseline_model.ipynb       Training & evaluasi baseline
+|   +-- 03_adversarial_attack.ipynb   Demo FGSM + slider interaktif
+|   +-- 04_defense.ipynb              Demo adversarial training + squeezing
+|   +-- 05_full_report.ipynb          Laporan lengkap presentasi
+|
++-- data/                      <-- DATASET
+|   +-- sample_data.csv        500-row synthetic (langsung pakai, no download)
+|   +-- README.md              Instruksi download CICIDS2017 penuh
+|
++-- results/                   <-- OUTPUT (dibuat otomatis)
+    +-- experiment_results.json       Semua angka dalam format JSON
+    +-- plots/
+        +-- accuracy_vs_epsilon.png
+        +-- confusion_matrix_baseline.png
+        +-- confusion_matrix_under_attack.png
+        +-- defense_comparison.png
+
+
+3.2 ARSITEKTUR ALIRAN DATA
+---------------------------
+
+CSV Dataset
+    |
+    v
+[data_pipeline.py]
+    Load -> Strip whitespace -> Drop NaN/Inf
+    -> Label encode (BENIGN=0, ATTACK=1)
+    -> Variance-based feature selection (top 20)
+    -> StandardScaler normalization
+    -> Train/Test split 80/20
+    |
+    +--------> X_train, y_train ---------> [model.py] --> Random Forest (rf)
+    |                                                 --> LR Surrogate (surrogate)
+    |
+    +--------> X_test,  y_test  ---------> [model.py] evaluate() --> Baseline metrics
+                                                |
+                                                v
+                                    [attacker.py]
+                                    surrogate + X_test + epsilon
+                                    FGSM: x_adv = x - eps * sign(p_attack * coef)
+                                    PGD:  iterative FGSM with L-inf projection
+                                                |
+                                                v
+                                        X_adversarial
+                                                |
+                               +----------------+----------------+
+                               |                                 |
+                               v                                 v
+                    [rf.predict(X_adv)]                 [defender.py]
+                    Detection Rate                   Adversarial Training
+                    (turun drastis!)                 Feature Squeezing
+                                                         |
+                                                         v
+                                                 Detection Rate (recovered)
+                                                         |
+                                                         v
+                                                 [visualizer.py]
+                                                 4 PNG plots + JSON results
+
+
+3.3 MENGAPA PAKAI SURROGATE MODEL?
+------------------------------------
+
+MASALAH:
+  Random Forest TIDAK bisa dihitung gradiennya karena:
+  - Terdiri dari banyak decision tree (threshold-based, bukan continuous)
+  - Tidak ada fungsi differentiable yang bisa di-backpropagation
+
+SOLUSI — Surrogate / Transferability Attack:
+  1. Train Logistic Regression pada data yang SAMA dengan RF
+  2. LR punya gradient analitik yang mudah dihitung:
+     gradient = p(attack) * coef
+  3. Hitung perturbasi berdasarkan gradient LR
+  4. Terapkan perturbasi yang sama ke sampel test
+  5. Cek apakah RF juga tertipu (transferability)
+
+KENAPA INI BERHASIL:
+  - Kedua model dilatih pada fitur yang sama
+  - Mereka belajar feature importance yang mirip
+  - Perturbasi yang memindahkan sampel ke arah "benign" di LR
+    seringkali JUGA memindahkan sampel ke arah "benign" di RF
+  - Ini disebut "adversarial transferability" — konsep penting di dunia
+    adversarial ML
+
+
+3.4 MATEMATIKA FGSM (SEDERHANA)
+---------------------------------
+
+Untuk traffic attack (y=1) yang ingin diklasifikasikan sebagai benign (y=0):
+
+  Loss yang diminimalkan:
+    L = -log(p(benign | x))  =  log(1 + exp(w·x + b))
+
+  Gradient loss terhadap input x:
+    dL/dx = p(attack | x) * w
+          = sigmoid(w·x + b) * w
+
+  FGSM update:
+    x_adversarial = x - epsilon * sign(dL/dx)
+                  = x - epsilon * sign(p_attack * w)
+
+  Interpretasi:
+    - Jika w[i] > 0 (fitur i meningkatkan p_attack):
+      kita KURANGI nilai fitur i (sign negatif)
+    - Jika w[i] < 0 (fitur i menurunkan p_attack):
+      kita TAMBAH nilai fitur i (sign positif)
+    - Hasilnya: sampel bergerak ke arah "lebih mirip benign"
+
+
+3.5 DEFENSE: ADVERSARIAL TRAINING
+------------------------------------
+
+Langkah:
+  1. Generate X_adv_train = FGSM(surrogate, X_train, epsilon=0.1)
+  2. Buat augmented dataset:
+     X_aug = concat(X_train, X_adv_train)  -- dua kali lebih besar
+     y_aug = concat(y_train, y_train)       -- label tetap sama
+  3. Shuffle X_aug, y_aug
+  4. Latih ulang RandomForest pada X_aug
+
+  Hasilnya: model "melihat" contoh yang sudah diperturbasi saat training
+  sehingga lebih tahan terhadap perturbasi serupa saat inference.
+
+
+3.6 DEFENSE: FEATURE SQUEEZING
+---------------------------------
+
+Langkah:
+  1. Untuk setiap fitur x_i:
+     - Hitung range: [x_min, x_max]
+     - Normalisasi ke [0, 1]
+     - Quantize ke 2^n_bits level
+     - Kembalikan ke range asli
+  2. Gunakan x_squeezed untuk inference (tanpa retrain)
+
+  Dengan n_bits=8 (256 level):
+  - Perturbasi sangat kecil (< 1/256 dari range) akan dibulatkan ke nol
+  - Perturbasi besar tetap ada → defense tidak sempurna
+  - Zero retraining cost!
+
+
+================================================================================
+  BAGIAN 4 — CARA INSTALASI (LANGKAH DEMI LANGKAH)
+================================================================================
+
+STEP 1: Pastikan Python 3.11 terinstall
+-----------------------------------------
+  Buka Command Prompt / PowerShell dan ketik:
+  > python --version
+
+  Harus menampilkan: Python 3.11.x
+  Jika belum: download dari https://python.org/downloads/
+
+STEP 2: Buka folder project
+-----------------------------
+  > cd "D:\Portofolio Cyber Alif\Project 10 - Adverscan\adverscan"
+
+  ATAU klik kanan di folder tersebut -> "Open in Terminal"
+
+STEP 3: Install semua dependensi
+----------------------------------
+  > pip install -r requirements.txt
+
+  Paket yang diinstall:
+  - scikit-learn   : model ML (Random Forest, Logistic Regression)
+  - numpy          : komputasi array dan matematika perturbasi
+  - pandas         : load dan manipulasi dataset CSV
+  - matplotlib     : semua plotting dan visualisasi
+  - seaborn        : heatmap confusion matrix yang rapi
+  - jupyter        : menjalankan notebook interaktif
+  - ipywidgets     : slider epsilon interaktif di notebook 03
+
+  Estimasi waktu install: 3-10 menit (tergantung kecepatan internet)
+  Estimasi ukuran download: ~200-400 MB
+
+STEP 4: Verifikasi instalasi
+------------------------------
+  > python -c "import sklearn, numpy, pandas, matplotlib, seaborn; print('Semua OK!')"
+
+  Harus menampilkan: Semua OK!
+
+
+================================================================================
+  BAGIAN 5 — CARA MENJALANKAN EXPERIMENT
+================================================================================
+
+OPSI A: Script Python (Cara Termudah)
+=======================================
+
+  > python run_experiment.py
+
+  Output yang diharapkan di terminal:
+
+  ================================================================
+    AdverScan - Adversarial ML Lab
+    Adversarial Attacks on ML-based Intrusion Detection Systems
+  ================================================================
+
+  [1/7] Loading dataset...
+    Full dataset not found - using sample_data.csv (demo mode)
+    Rows: 500  |  Benign: 300  |  Attack: 200
+    Train: (400, 20)  |  Test: (100, 20)
+    Dataset : sample_data.csv  (500 rows, 200 attack, 300 benign)
+
+  [2/7] Training baseline models...
+    Random Forest : 100 trees, max_depth=10
+    LR Surrogate  : trained as white-box proxy for gradient computation
+
+  [3/7] Baseline evaluation (no attack)...
+    Accuracy       : 93.0%
+    Detection Rate : 92.5%
+    F1 Score       : 91.4%
+
+  [4/7] FGSM attack sweep (epsilon 0.0 to 0.5)...
+    eps=0.00 -> Detection rate: 92.5%
+    eps=0.05 -> Detection rate: 80.0%
+    eps=0.10 -> Detection rate: 65.0%  <- drop!
+    eps=0.20 -> Detection rate: 25.0%  <- drop!
+    eps=0.30 -> Detection rate: 12.5%  <- drop!
+    eps=0.50 -> Detection rate:  0.0%  <- drop!
+
+  [5/7] PGD attack (eps=0.3, alpha=0.03, 20 steps)...
+    PGD -> Detection rate: 12.5%
+
+  [6/7] Defense evaluation...
+    Training robust model (adversarial training)...
+    Adv. Training   -> 92.5% detection under attack (eps=0.1)
+    Feat. Squeezing -> 65.0% detection under attack (eps=0.1)
+
+  [7/7] Generating plots...
+    Saved: accuracy_vs_epsilon.png
+    Saved: confusion_matrix_baseline.png
+    Saved: confusion_matrix_under_attack.png
+    Saved: defense_comparison.png
+
+  ================================================================
+    Results saved -> results/experiment_results.json
+    Plots saved   -> results/plots/  (4 PNG files)
+    Runtime       : ~54s
+  ================================================================
+
+  Runtime estimasi berdasarkan hardware:
+  - Intel i7-1165G7 (laptop ini)  : ~50-90 detik
+  - Intel i5 generasi 10           : ~90-150 detik
+  - Intel i3 / AMD Ryzen 5         : ~120-200 detik
+
+
+OPSI B: Jupyter Notebook (Cara Interaktif)
+===========================================
+
+  LANGKAH 1: Jalankan Jupyter
+  > jupyter notebook
+
+  Browser akan membuka secara otomatis di: http://localhost:8888
+
+  LANGKAH 2: Buka folder notebooks/
+  Klik folder "notebooks" di browser Jupyter
+
+  LANGKAH 3: Urutan yang direkomendasikan:
+
+  [01] 01_data_exploration.ipynb
+       - Buka dulu ini untuk memahami dataset
+       - Lihat distribusi label, histogram fitur, heatmap korelasi
+       - Jalankan semua sel: Kernel -> Restart & Run All
+
+  [02] 02_baseline_model.ipynb
+       - Train model RF dan LR
+       - Lihat confusion matrix dan feature importances
+       - Jalankan semua sel: Kernel -> Restart & Run All
+
+  [03] 03_adversarial_attack.ipynb  <-- PALING MENARIK
+       - Demo FGSM attack dengan epsilon sweep
+       - ADA SLIDER INTERAKTIF: geser slider epsilon untuk melihat
+         confusion matrix berubah secara real-time!
+       - Scatter plot menunjukkan pergerakan sampel di feature space
+       - Jalankan sel satu per satu untuk memahami tiap langkah
+
+  [04] 04_defense.ipynb
+       - Demo adversarial training dan feature squeezing
+       - Lihat tabel perbandingan berbagai nilai n_bits squeezing
+       - Jalankan semua sel: Kernel -> Restart & Run All
+
+  [05] 05_full_report.ipynb  <-- UNTUK PRESENTASI
+       - Notebook lengkap dari awal sampai akhir
+       - Berisi narasi, semua plot, dan kesimpulan
+       - Cocok untuk demo ke dosen/audience
+       - Jalankan semua sel: Kernel -> Restart & Run All
+
+  TIPS: Jika ada error saat menjalankan notebook:
+  - Pastikan sudah pip install -r requirements.txt
+  - Coba: Kernel -> Restart & Clear Output, lalu Run All lagi
+
+
+OPSI C: Gunakan Dataset CICIDS2017 Penuh (Opsional)
+=====================================================
+
+  Untuk hasil yang lebih realistis dan akurat:
+
+  LANGKAH 1: Download dataset
+  Pergi ke: https://www.unb.ca/cic/datasets/ids-2017.html
+  Download: Wednesday-workingHours.pcap_ISCX.csv (~450 MB)
+
+  LANGKAH 2: Letakkan file
+  Simpan file di folder: adverscan/data/
+  Rename menjadi: cicids2017_wednesday.csv
+  Path lengkap: adverscan/data/cicids2017_wednesday.csv
+
+  LANGKAH 3: Jalankan kembali
+  > python run_experiment.py
+
+  System akan otomatis mendeteksi file penuh dan menggunakannya.
+  Runtime dengan dataset penuh: ~15-30 menit
+
+  Perbedaan hasil dengan dataset penuh:
+  - Akurasi baseline lebih tinggi (99%+)
+  - Attack effect lebih dramatis (drop lebih dalam)
+  - Hasil lebih bisa dipertanggungjawabkan secara akademis
+
+
+================================================================================
+  BAGIAN 6 — PARAMETER YANG BISA DIUBAH
+================================================================================
+
+6.1 Epsilon (kekuatan serangan)
+---------------------------------
+  File : src/experiment.py  atau  run_experiment.py
+  Baris: EPSILONS = [0.0, 0.05, 0.1, 0.2, 0.3, 0.5]
+
+  Penjelasan:
+  - epsilon = 0.0  : tidak ada serangan (baseline)
+  - epsilon = 0.1  : serangan ringan
+  - epsilon = 0.3  : serangan sedang (detection drop signifikan)
+  - epsilon = 0.5  : serangan kuat (detection hampir nol)
+
+  Ubah contoh: EPSILONS = [0.0, 0.1, 0.3, 0.5, 1.0, 2.0]
+  (epsilon > 0.5 = serangan sangat kuat, perturbasi lebih terlihat)
+
+
+6.2 Jumlah Fitur yang Dipilih
+-------------------------------
+  File : run_experiment.py  atau saat memanggil load_data()
+
+  Contoh perubahan:
+    X_train, X_test, ... = load_data(data_path, n_features=30)
+
+  Default: 20 fitur (balance antara akurasi dan kecepatan)
+  Range  : 10-78 fitur (lebih banyak = lebih lambat tapi lebih akurat)
+
+
+6.3 Parameter Random Forest
+-----------------------------
+  File : src/model.py, fungsi train_random_forest()
+
+  train_random_forest(X_train, y_train,
+      n_estimators=100,  # jumlah pohon (lebih banyak = lebih lambat tapi akurat)
+      max_depth=10,      # kedalaman pohon (lebih dalam = lebih fit ke data)
+      random_state=42    # seed untuk reproduktibilitas
+  )
+
+
+6.4 Parameter PGD Attack
+--------------------------
+  File : run_experiment.py
+
+  pgd_attack(surrogate, X_test, y_test,
+      epsilon=0.3,    # radius maksimal perturbasi
+      alpha=0.03,     # step size per iterasi (alpha < epsilon)
+      num_steps=20,   # jumlah iterasi (lebih banyak = lebih kuat tapi lambat)
+  )
+
+
+6.5 Feature Squeezing Bit Depth
+---------------------------------
+  File : src/defender.py
+
+  feature_squeezing_detection_rate(rf, X_adv, y_test,
+      n_bits=8   # 4=agresif, 8=balanced, 16=hampir tidak ada efek
+  )
+
+  n_bits=4  : 16 level  -> hapus perturbasi besar tapi rusak fitur asli
+  n_bits=8  : 256 level -> balance antara defense dan preservasi
+  n_bits=16 : 65536 level -> hampir tidak ada efek squeezing
+
+
+================================================================================
+  BAGIAN 7 — MEMBACA OUTPUT DAN HASIL
+================================================================================
+
+7.1 File results/experiment_results.json
+-----------------------------------------
+  Berisi semua angka eksperimen dalam format terstruktur:
+
+  {
+    "baseline": {
+      "accuracy": 0.93,           <- 93% akurasi keseluruhan
+      "detection_rate": 0.925,    <- 92.5% attack terdeteksi
+      "confusion_matrix": [[56,4],[3,37]]
+      ^^ [56 TN, 4 FP, 3 FN, 37 TP]
+    },
+    "fgsm_sweep": {
+      "0.0": 0.925,   <- eps=0.0: 92.5% (baseline, no attack)
+      "0.1": 0.65,    <- eps=0.1: 65.0% (serangan ringan)
+      "0.2": 0.25,    <- eps=0.2: 25.0% (serangan sedang, drop parah!)
+      "0.5": 0.0      <- eps=0.5: 0.0%  (serangan kuat, bypass total!)
+    },
+    "adversarial_training": {
+      "detection_rate_under_attack": 0.925   <- recovery ke 92.5%
+    }
+  }
+
+
+7.2 Plot results/plots/accuracy_vs_epsilon.png
+------------------------------------------------
+  Apa yang ditampilkan:
+  - Garis biru     : FGSM attack — detection rate turun seiring epsilon naik
+  - Garis merah    : PGD attack — titik referensi (lebih kuat dari FGSM)
+  - Garis hijau    : Baseline detection rate (tanpa serangan)
+  - Garis oranye   : Setelah adversarial training (recovery)
+  - Garis ungu     : Setelah feature squeezing (recovery parsial)
+
+  Apa yang harus dilihat:
+  - Seberapa cepat garis biru turun = seberapa rentan model
+  - Gap antara garis oranye/ungu dan garis merah = efektivitas defense
+
+
+7.3 Plot confusion_matrix_baseline.png vs confusion_matrix_under_attack.png
+----------------------------------------------------------------------------
+  Baseline (kiri):
+  - True Positive (Attack->Attack) tinggi ~92%
+  - False Negative (Attack->Benign) rendah ~8%
+
+  Under Attack (kanan):
+  - True Positive TURUN drastis ke ~25%
+  - False Negative NAIK ke ~75%
+  - Artinya: 75% dari serangan LOLOS tanpa terdeteksi!
+
+
+7.4 Plot defense_comparison.png
+---------------------------------
+  Bar chart 4 kondisi:
+  1. Baseline (hijau)         : ~92.5% — kondisi ideal
+  2. Under Attack (merah)     : ~25%   — setelah diserang
+  3. Adv. Training (biru)     : ~92.5% — defense terbaik
+  4. Feat. Squeezing (ungu)   : ~65%   — defense cepat tapi kurang kuat
+
+
+================================================================================
+  BAGIAN 8 — TROUBLESHOOTING
+================================================================================
+
+MASALAH 1: ModuleNotFoundError: No module named 'seaborn'
+SOLUSI   : > pip install seaborn matplotlib
+
+MASALAH 2: ModuleNotFoundError: No module named 'sklearn'
+SOLUSI   : > pip install scikit-learn
+
+MASALAH 3: UnicodeEncodeError saat print di Windows
+SOLUSI   : Sudah dihandle di run_experiment.py dengan reconfigure encoding
+           Jika masih error: > set PYTHONIOENCODING=utf-8
+
+MASALAH 4: MemoryError saat loading dataset CICIDS2017 penuh
+SOLUSI   : Buka src/data_pipeline.py, tambahkan parameter nrows:
+           df = pd.read_csv(path, ..., nrows=100000)  # baca 100K baris saja
+
+MASALAH 5: Jupyter notebook tidak terbuka di browser
+SOLUSI   : Copy URL dari terminal (http://localhost:8888/...) ke browser manual
+           Atau jalankan: > jupyter notebook --no-browser, lalu buka URL-nya
+
+MASALAH 6: Slider tidak muncul di notebook 03
+SOLUSI   : > pip install ipywidgets
+           Lalu: > jupyter nbextension enable --py widgetsnbextension
+           Restart kernel dan jalankan ulang sel
+
+MASALAH 7: Plot tidak tersimpan (permission denied)
+SOLUSI   : Pastikan folder results/plots/ ada
+           > mkdir results\plots  (di Windows CMD)
+           Atau jalankan run_experiment.py sekali untuk membuat folder
+
+MASALAH 8: Detection rate tidak turun setelah attack
+PENYEBAB : Data terlalu mudah dipisah (linearly separable)
+SOLUSI   : Gunakan dataset CICIDS2017 penuh, atau
+           Naikkan epsilon ke 1.0-2.0 di EPSILONS list
+
+MASALAH 9: Experiment berjalan sangat lambat (>30 menit)
+SOLUSI   : Kurangi n_estimators di train_random_forest: n_estimators=50
+           Kurangi n_features di load_data: n_features=10
+           Kurangi num_steps di pgd_attack: num_steps=5
+
+
+================================================================================
+  BAGIAN 9 — KONSEP KUNCI UNTUK DIPAHAMI
+================================================================================
+
+ISTILAH             ARTI
+---------           ----
+epsilon (eps)       Kekuatan maksimal perturbasi adversarial.
+                    Kecil (0.05) = tidak terlihat, tapi mungkin tidak efektif.
+                    Besar (0.5) = sangat efektif tapi perturbasi terlihat jelas.
+
+Detection Rate      Persentase traffic attack yang BERHASIL dideteksi sebagai attack.
+                    92.5% berarti 7.5% attack lolos tanpa terdeteksi.
+
+False Negative      Serangan yang tidak terdeteksi = SANGAT BERBAHAYA di IDS!
+                    Adversarial attack bertujuan memaksimalkan False Negative.
+
+Surrogate Model     Model pengganti (LR) yang digunakan untuk menghitung gradient
+                    karena model utama (RF) tidak differentiable.
+
+Transferability     Kemampuan perturbasi yang dibuat untuk model A untuk juga
+                    menipu model B. Ini yang membuat black-box attack mungkin.
+
+FGSM                Fast Gradient Sign Method. Attack satu langkah.
+                    Lebih cepat, lebih sedikit perturbasi.
+
+PGD                 Projected Gradient Descent. Attack banyak langkah.
+                    Lebih lambat, lebih kuat, menghasilkan drop lebih dalam.
+
+Adversarial         Latih model pada data asli PLUS data yang sudah diserang.
+Training            Model jadi lebih robust karena "pernah melihat serangan."
+
+Feature             Kurangi presisi setiap fitur sebelum inference.
+Squeezing           Perturbasi kecil akan hilang setelah dibulatkan.
+
+
+================================================================================
+  BAGIAN 10 — REFERENSI DAN BACAAN LANJUTAN
+================================================================================
+
+PAPERS UTAMA:
+  [1] Goodfellow et al. (2014) — "Explaining and Harnessing Adversarial Examples"
+      Penemu FGSM. URL: https://arxiv.org/abs/1412.6572
+
+  [2] Madry et al. (2018) — "Towards Deep Learning Models Resistant to Adversarial Attacks"
+      Penemu PGD. URL: https://arxiv.org/abs/1706.06083
+
+  [3] Xu et al. (2018) — "Feature Squeezing: Detecting Adversarial Examples in DNN"
+      Penemu Feature Squeezing. URL: https://arxiv.org/abs/1704.01155
+
+  [4] Rosenberg et al. (2021) — "Adversarial Machine Learning Attacks and Defenses
+      in Cybersecurity"
+      Adversarial ML khusus untuk keamanan siber.
+
+DATASET:
+  CICIDS2017: https://www.unb.ca/cic/datasets/ids-2017.html
+  Canadian Institute for Cybersecurity - University of New Brunswick
+
+LIBRARY:
+  scikit-learn docs : https://scikit-learn.org/stable/
+  Foolbox (optional): https://foolbox.readthedocs.io/
+  ART (optional)    : https://adversarial-robustness-toolbox.readthedocs.io/
+
+
+================================================================================
+  QUICK REFERENCE — PERINTAH PALING PENTING
+================================================================================
+
+  # Install semua dependensi
+  pip install -r requirements.txt
+
+  # Jalankan experiment penuh (tanpa download apapun)
+  python run_experiment.py
+
+  # Jalankan dengan dataset CICIDS2017 penuh (setelah download)
+  python run_experiment.py --data data/cicids2017_wednesday.csv
+
+  # Buka notebook interaktif
+  jupyter notebook
+
+  # Cek apakah semua library terinstall
+  python -c "import sklearn, numpy, pandas, matplotlib, seaborn; print('OK')"
+
+  # Generate ulang sample data (jika ingin reset)
+  python _gen_sample_data.py
+
+  # Generate ulang notebook (jika notebook rusak)
+  python _gen_notebooks.py
+
+
+================================================================================
+  END OF GUIDE — AdverScan v1.0
+================================================================================

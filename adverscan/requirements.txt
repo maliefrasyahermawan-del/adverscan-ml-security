@@ -1,0 +1,30 @@
+# AdverScan — Python dependencies
+# Install with:  pip install -r requirements.txt
+# Torch (CPU-only) is listed separately at the bottom.
+
+# Core ML
+scikit-learn>=1.3.0,<1.6.0
+numpy>=1.24.0,<2.0.0
+pandas>=2.0.0,<3.0.0
+joblib>=1.3.0
+
+# Visualization
+matplotlib>=3.7.0,<4.0.0
+seaborn>=0.12.0,<0.14.0
+
+# Notebook
+jupyter>=1.0.0
+jupyterlab>=4.0.0
+ipywidgets>=8.0.0
+nbformat>=5.9.0
+
+# Optional: Foolbox adversarial attack library (uses PyTorch backend)
+# Uncomment if you want Foolbox integration (requires torch below)
+# foolbox>=3.3.0,<4.0.0
+
+# Optional: Adversarial Robustness Toolbox
+# adversarial-robustness-toolbox>=1.16.0,<2.0.0
+
+# CPU-only PyTorch — install separately (not via regular pip index):
+# pip install torch --index-url https://download.pytorch.org/whl/cpu
+# (required only if you enable Foolbox above)
